@@ -28,11 +28,46 @@ static char *progname;
 static kstat_ctl_t *kc = NULL;
 static size_t pagesize;
 
+
+/* nicenum taken from usr/src/lib/libzpool/common/util.c
+ * should fix #640 and #5827 first and remove here
+ * copyrights:
+	 * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ */
+
+void
+nicenum(uint64_t num, char *buf)
+{
+	uint64_t n = num;
+	int index = 0;
+	char u;
+
+	while (n >= 1024) {
+		n = (n + (1024 / 2)) / 1024; /* Round up or down */
+		index++;
+	}
+
+	u = " KMGTPE"[index];
+
+	if (index == 0) {
+		(void) sprintf(buf, "%llu", (u_longlong_t)n);
+	} else if (n < 10 && (num & (num - 1)) != 0) {
+		(void) sprintf(buf, "%.2f%c",
+		    (double)num / (1ULL << 10 * index), u);
+	} else if (n < 100 && (num & (num - 1)) != 0) {
+		(void) sprintf(buf, "%.1f%c",
+		    (double)num / (1ULL << 10 * index), u);
+	} else {
+		(void) sprintf(buf, "%llu%c", (u_longlong_t)n, u);
+	}
+}
+
+
 static void
 usage(void)
 {
 	(void) fprintf(stderr, gettext(
-	    "Usage: %s [-k|-m|-g]\n"
+	    "Usage: %s [-p]\n"
 	    "Display the amount of free and used system memory\n"),
 	    progname);
 	exit(1);
@@ -41,11 +76,13 @@ usage(void)
 int main(int argc, char *argv[]) {
 	int c;
 	unsigned long long pages, total, freemem, avail, kernel,
-	    locked, physmem;
-	unsigned long long ram_kernel, ram_locked, ram_used, ram_unusable;
-	unsigned long long swapalloc, swapresv, swapavail, swaptotal;
+	    pageslocked, arcsize, pp_kernel;
+	unsigned long long locked, used;
+	unsigned long long swaptotal, swapused, swapfree;
+	char ram_total[6], ram_used[6], ram_free[6], ram_locked[6], ram_kernel[6];
+	char ram_cached[6], swap_total[6], swap_used[6], swap_free[6];
 	struct anoninfo ai;
-	int div = 1;
+	boolean_t parsable = B_FALSE;
 
 	(void) setlocale(LC_ALL, "");
 
@@ -55,17 +92,12 @@ int main(int argc, char *argv[]) {
 	(void) textdomain(TEXT_DOMAIN);
 
 	progname = basename(argv[0]);
-	while ((c = getopt(argc, argv, "gkm")) != -1) {
+	while ((c = getopt(argc, argv, "hp")) != -1) {
 		switch (c) {
-			case 'k':
-				div = 1;
+			case 'p':
+				parsable = B_TRUE;
 				break;
-			case 'g':
-				div = 1024*1024;
-				break;
-			case 'm':
-				div = 1024;
-				break;
+			case 'h': /* fallthrough */
 			case '?': /* fallthrough */
 			default:
 				usage();
@@ -80,7 +112,7 @@ int main(int argc, char *argv[]) {
 
 	pagesize = getpagesize();
 	pages = sysconf(_SC_PHYS_PAGES);
-	total = (pagesize * pages) >> 10;
+	total = pagesize * pages;
 
 	kstat_t *ks = kstat_lookup(kc, "unix", 0, "system_pages");
 	kstat_read(kc, ks, 0);
@@ -90,66 +122,77 @@ int main(int argc, char *argv[]) {
 		(void) kstat_close(kc);
 		return (-1);
 	}
-	freemem = ((unsigned long long)knp->value.ui64 * pagesize) >> 10;
+	freemem = (unsigned long long)knp->value.ui64 * pagesize;
 
 	knp = kstat_data_lookup(ks, "availrmem");
 	if (knp == NULL) {
 		(void) kstat_close(kc);
 		return (-1);
 	}
-	avail = ((unsigned long long)knp->value.ui64 * pagesize) >> 10;
+	avail = (unsigned long long)knp->value.ui64 * pagesize;
 
 	knp = kstat_data_lookup(ks, "pp_kernel");
 	if (knp == NULL) {
 		(void) kstat_close(kc);
 		return (-1);
 	}
-	kernel = ((unsigned long long)knp->value.ui64 * pagesize) >> 10;
+	pp_kernel = (unsigned long long)knp->value.ui64 * pagesize;
 
 	knp = kstat_data_lookup(ks, "pageslocked");
 	if (knp == NULL) {
 		(void) kstat_close(kc);
 		return (-1);
 	}
-	locked = ((unsigned long long)knp->value.ui64 * pagesize) >> 10;
+	pageslocked = (unsigned long long)knp->value.ui64 * pagesize;
 
-	knp = kstat_data_lookup(ks, "physmem");
+	ks = kstat_lookup(kc, "zfs", 0, "arcstats");
+	kstat_read(kc, ks, 0);
+
+	knp = kstat_data_lookup(ks, "size");
 	if (knp == NULL) {
 		(void) kstat_close(kc);
 		return (-1);
 	}
-	physmem = ((unsigned long long)knp->value.ui64 * pagesize) >> 10;
+	arcsize = (unsigned long long)knp->value.ui64;
 
 	kstat_close(kc);
 
-	if (kernel < locked) {
-		ram_kernel = kernel;
-		ram_locked = locked - kernel;
+	if (pp_kernel < pageslocked) {
+		kernel = pp_kernel;
+		locked = pageslocked - pp_kernel;
 	} else {
-		ram_kernel = locked;
-		ram_locked = 0;
+		kernel = pageslocked;
+		locked = 0;
 	}
 
-	ram_used = avail - freemem;
-	ram_unusable = total - physmem;
+	used = avail - freemem;
 
 	swapctl(SC_AINFO, &ai);
-	swapalloc  = ai.ani_max - ai.ani_free;
-	swapalloc = swapalloc * pagesize >> 10;
-	swapresv   = ai.ani_resv + ai.ani_free - ai.ani_max;
-	swapresv  = swapresv * pagesize >> 10;
-	swapavail  = ai.ani_max - ai.ani_resv;
-	swapavail = pagesize * swapavail >> 10;
-	swaptotal = ((unsigned long long) ai.ani_max * pagesize) >> 10;
+	swaptotal = ai.ani_max * pagesize;
+	swapused  = (ai.ani_max - ai.ani_free + ai.ani_resv) * pagesize;
+	swapfree  = (ai.ani_free - ai.ani_resv) * pagesize;
 
-	printf("%16s %10s %10s %10s %10s %10s\n",
-	    "total", "used", "free", "locked", "kernel", "unused");
+	if (parsable) {
+		printf("type;total;used;free;locked;kernel;cached\n");
+		printf("Mem;%llu;%llu;%llu;%llu;%llu;%llu\n", total,
+			used, freemem, locked, kernel, arcsize);
+		printf("Swap;%llu;%llu;%llu\n", swaptotal, swapused, swapfree);
+	} else {
+		nicenum(total, ram_total);
+		nicenum(used, ram_used);
+		nicenum(freemem, ram_free);
+		nicenum(locked, ram_locked);
+		nicenum(kernel, ram_kernel);
+		nicenum(arcsize, ram_cached);
+		nicenum(swaptotal, swap_total);
+		nicenum(swapused, swap_used);
+		nicenum(swapfree, swap_free);
 
-	printf("Mem:  %10llu %10llu %10llu %10llu %10llu %10llu\n"
-	    "Swap: %10llu %10llu %10llu\n", total/div, ram_used/div,
-	    freemem/div, ram_locked/div, ram_kernel/div,
-	    ram_unusable/div, swaptotal/div,
-	    swapalloc/div + swapresv/div, swapavail/div);
-
+		printf("%16s %10s %10s %10s %10s %10s\n",
+			"total", "used", "free", "locked", "kernel", "cached");
+		printf("Mem:  %10s %10s %10s %10s %10s %10s\n",
+			ram_total, ram_used, ram_free, ram_locked, ram_kernel, ram_cached);
+		printf("Swap: %10s %10s %10s\n", swap_total, swap_used, swap_free);
+	}
 	return (0);
 }
