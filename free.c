@@ -168,9 +168,9 @@ int main(int argc, char *argv[]) {
 	used = avail - freemem;
 
 	swapctl(SC_AINFO, &ai);
-	swaptotal = ai.ani_max * pagesize;
-	swapused  = (ai.ani_max - ai.ani_free + ai.ani_resv) * pagesize;
-	swapfree  = (ai.ani_free - ai.ani_resv) * pagesize;
+	swaptotal = (unsigned long long)ai.ani_max * pagesize;
+	swapused  = (unsigned long long)(ai.ani_max - ai.ani_free + ai.ani_resv) * pagesize;
+	swapfree  = (unsigned long long)(ai.ani_free - ai.ani_resv) * pagesize;
 
 	if (parsable) {
 		printf("type;total;used;free;locked;kernel;cached\n");
