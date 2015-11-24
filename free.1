@@ -1,0 +1,42 @@
+.\"  Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+.\" 
+.TH FREE 1 "November 2015" "free" "User Commands"
+.SH NAME
+free \- Display amount of free and used memory in the system
+.SH SYNOPSIS
+.B free
+.RI [ -p ]
+.SH DESCRIPTION
+.B free
+displays the total amount of free and used physical and swap memory in the
+system, as well as the locked and kernel memory, and zfs arc cache size.
+The information is assembled by sysconf and kstat. The displayed columns
+are:
+.TP
+\fBtotal\fR
+Total installed memory (\fB_SC_PHYS_PAGES\fR)
+.TP
+\fBused\fR
+Used memory (calculated as \fBavailrmem\fR - \fBfreemem\fR)
+.TP
+\fBfree\fR
+Unused memory (\fBfreemem\fR)
+.TP
+\fBlocked\fR
+Locked memory (\fBpageslocked\fR)
+.TP
+\fBkernel\fR
+Memory used by kernel (\fBpp_kernel\fR)
+.TP
+\fBcached\fR
+Memory used by the ZFS ARC Cache.
+.SH OPTIONS
+.TP
+\fB\-p\fR
+Print the output in a parsable format.
+.PD
+.SH "SEE ALSO"
+.BR sysconf (3),
+.BR kstat (1),
+.BR top "(1),
+.BR vmstat (8).
